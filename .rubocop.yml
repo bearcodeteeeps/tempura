@@ -1,0 +1,36 @@
+require:
+  - rubocop-performance
+  - rubocop-rails
+  - rubocop-rspec
+  
+AllCops:
+  TargetRubyVersion: 3.0.2
+  Exclude:
+    - '**/Rakefile'
+    - 'db/**/*'
+    - 'bin/**/*'
+    - 'config/initializers/**/*'
+    - 'tmp/**/*'
+    - 'vendor/bundle/**/*'
+    - 'config/application.rb'
+    - 'config/environments/**/*'
+    - 'spec/spec_helper.rb'
+    - 'spec/rails_helper.rb'
+    - 'spec/support/**/*'
+    - 'node_modules/**/*'
+
+Metrics/BlockLength:
+  Exclude:
+    - "*.gemspec"
+    - "Gemfile"
+    - "config/routes.rb"
+    - "spec/**/*"
+Metrics/ClassLength:
+  Exclude:
+    - "spec/**/*"
+Metrics/MethodLength:
+  Exclude:
+    - "spec/**/*"
+
+Layout/LineLength:
+  Max: 120 # Increase line length to 120

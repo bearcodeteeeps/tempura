@@ -1,0 +1,158 @@
+# Ruby CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-ruby/ for more details
+#
+version: 2.1
+
+orbs: 
+  browser-tools: circleci/browser-tools@1.2.4
+
+defaults: &defaults
+  working_directory: ~/tempura
+
+references:
+  default_docker_ruby_executor: &default_docker_ruby_executor
+    image: cimg/ruby:3.1.0-browsers
+    environment:
+      BUNDLE_JOBS: 3
+      BUNDLE_RETRY: 3
+      BUNDLE_PATH: vendor/bundle
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: ""
+      RAILS_ENV: test
+      RACK_ENV: test
+      NODE_ENV: test
+  postgres: &postgres
+    image: cimg/postgres:14.0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: tempura_test
+      POSTGRES_PASSWORD: ""
+  redis: &redis
+    image: circleci/redis:6.2.6-alpine
+
+jobs:
+  build:
+    <<: *defaults
+    docker:
+      - *default_docker_ruby_executor
+    steps:
+      - checkout
+      - run:
+          name: Which bundler?
+          command: bundle -v
+      # Restore bundle cache if there's an existing one
+      - restore_cache:
+          keys:
+            - tempura-bundle-v2-{{ checksum "Gemfile.lock" }}
+            - tempura-bundle-v2-
+      - run:
+          name: Bundle Install
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle check || bundle install
+      # Store bundle cache if it's changed
+      - save_cache:
+          key: tempura-bundle-v2-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+      # Restore assets cache if there's an existing one
+      - restore_cache:
+          keys:
+            - assets-{{ .Branch }}-{{ .Revision }}
+            - assets-{{ .Branch }}
+            - assets
+      - run:
+          name: Precompile assets
+          command: bundle exec rails assets:precompile
+      # Store assets cache if it's changed
+      - save_cache:
+          key: assets-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - public/assets
+            - tmp/cache/assets
+            - tmp/cache/assets/sprockets
+      - run:
+          name: Bundle audit
+          command: bundle exec rake bundler:audit
+      - run:
+          name: Rubocop
+          command: bundle exec rake rubocop
+      - run:
+          name: i18n
+          command: bundle exec rake i18n
+  test:
+    <<: *defaults
+    docker:
+      - *default_docker_ruby_executor
+      - *postgres
+      - *redis
+    steps:
+      - browser-tools/install-chrome
+      - browser-tools/install-chromedriver
+      - run:
+          command: |
+            google-chrome --version
+            chromedriver --version
+          name: Check install
+      - checkout
+      - restore_cache:
+          keys:
+            - tempura-bundle-v2-{{ checksum "Gemfile.lock" }}
+            - tempura-bundle-v2-
+      - run:
+          name: Bundle Install
+          command: bundle check --path=vendor/bundle || bundle install --path vendor/bundle
+      - restore_cache:
+          keys:
+            - assets-{{ .Branch }}-{{ .Revision }}
+            - assets-{{ .Branch }}
+            - assets
+      - run:
+          name: Wait for DB
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Database setup
+          command: bundle exec rails db:schema:load --trace
+      # Run rspec in parallel
+      - run:
+          name: Run rspec tests and report coverage
+          command: |
+            curl https://deepsource.io/cli | sh
+            mkdir /tmp/test-results
+            TESTFILES=$(circleci tests glob "spec/**/*_spec.rb" | circleci tests split --split-by=timings)
+            COVERAGE=true bundle exec rspec $TESTFILES --profile 10 --format RspecJunitFormatter --out /tmp/test-results/rspec.xml --format progress
+            ./bin/deepsource report --analyzer test-coverage --key ruby --value-file coverage/backend/.resultset.json
+      # Collect reports      
+      - store_test_results:
+          path: /tmp/test-results
+      - store_artifacts:
+          path: coverage/backend
+  deploy:
+    <<: *defaults
+    docker:
+      - *default_docker_ruby_executor
+    steps:
+      - checkout
+      - run:
+          name: Deploy web service
+          command: curl -s "https://api.render.com/deploy/srv-c754ujh0gd076j2qhbqg?key=$RENDER_WEB_SERVICE_KEY"
+      - run:
+          name: Deploy worker service
+          command: curl -s "https://api.render.com/deploy/srv-c7556l10gd076j2qhgsg?key=$RENDER_WORKER_SERVICE_KEY"
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - build
+      - test:
+          requires:
+            - build
+      - deploy:
+          requires:
+            - test
+          filters:
+            branches:
+              only: main
